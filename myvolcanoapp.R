@@ -21,6 +21,7 @@ make_volcano = function(
     downcolor = 'Blue', 
     midcolor = 'Gray', 
     labelcolor = 'Black', 
+    labelsize = 3,
     remove_genes = c(),
     remove_labels = c(),
     overlap_metric_secondary = Inf, 
@@ -52,8 +53,8 @@ make_volcano = function(
     ggtitle(graph_title) +
     theme(panel.grid = element_blank(), legend.position = "none") 
   
-  if (label_genes) {plot = plot + ggrepel::geom_text_repel(aes(label = name), color = labelcolor, max.overlaps = overlap_metric, nudge_y = 1)}
-  if (length(genes_to_label) > 0) {plot = plot + geom_text_repel(aes(label = name_specific), color = labelcolor, max.overlaps = overlap_metric_secondary)}
+  if (label_genes) {plot = plot + ggrepel::geom_text_repel(aes(label = name), color = labelcolor, size = labelsize, max.overlaps = overlap_metric, nudge_y = 1)}
+  if (length(genes_to_label) > 0) {plot = plot + geom_text_repel(aes(label = name_specific), color = labelcolor, size = labelsize, max.overlaps = overlap_metric_secondary)}
   if (visible_cutoffs) {plot = plot + geom_vline(xintercept = up_quant, linetype=3) + geom_vline(xintercept = down_quant, linetype = 3) + geom_hline(yintercept = -log10(p_val_cutoff), linetype = 3)}
   
   return(plot)
@@ -79,24 +80,35 @@ ui <- fluidPage(
   
   sidebarLayout(
     sidebarPanel(
-      fileInput("upload", "Upload Differential Expression Results (.csv file)", accept = c(".csv")),
-      textInput("title", "Enter Title", value = "My Volcano Plot"),
-      h4("Labels"),
-      actionButton("labels","Show/Hide Default Labels"),
-      numericInput("overlap","Overlap Metric", value = 10),
-      h4("Thresholds"),
-      numericInput("logfc", "Log Fold Change Threshold", value = 0.5),
-      numericInput("pval", "FDR P Value Threshold", value = 0.01),
-      h4("Colors"),
-      textInput("upcolor","Upregulated Genes", value = "Yellow"),
-      textInput("downcolor","DownregulatedGenes",value = "Blue"),
-      textInput("midcolor","Non-significant Genes", value = "Grey"),
-      h4("Size"),
-      sliderInput("height", "height", min = 100, max = 1000, value = 500),
-      sliderInput("width", "width", min = 100, max = 1000, value = 500),
-      h4("Download Your Plot"),
-      selectInput("filetype", "Select File Type", choices = c("png","jpg","svg"), selected = "png"),
-      downloadButton("download")
+      tabsetPanel(
+        tabPanel("General", 
+                 fileInput("upload", "Upload Differential Expression Results (.csv file)", accept = c(".csv")),
+                 textInput("title", "Enter Title", value = "My Volcano Plot"),
+                 h4("Labels"),
+                 actionButton("labels","Show/Hide Default Labels"),
+                 numericInput("overlap","Overlap Metric", value = 10),
+                 h4("Thresholds"),
+                 numericInput("logfc", "Log Fold Change Threshold", value = 0.5),
+                 numericInput("pval", "FDR P Value Threshold", value = 0.01),
+                 h4("Colors"),
+                 textInput("upcolor","Upregulated Genes", value = "Yellow"),
+                 textInput("downcolor","DownregulatedGenes",value = "Blue"),
+                 textInput("midcolor","Non-significant Genes", value = "Grey"),
+                 h4("Size"),
+                 sliderInput("height", "height", min = 100, max = 1000, value = 450),
+                 sliderInput("width", "width", min = 100, max = 1000, value = 450),
+                 h4("Download Your Plot"),
+                 selectInput("filetype", "Select File Type", choices = c("png","jpg","svg"), selected = "png"),
+                 downloadButton("download")),   
+        tabPanel("Advanced", 
+                 h4("Add Labels by Entering Gene Names"),
+                 textAreaInput("gene_input", "Enter Gene Names (comma or newline separated)",
+                               height = "100px"),
+                 numericInput("labelsize", "Label Font Size", value = 4),
+                 textInput("labelcolor", "Label Font Color", value = "Black")
+                 ),
+        
+      )
     ),
     mainPanel(
       # Add text instructions above plot
@@ -104,11 +116,11 @@ ui <- fluidPage(
         div(
           style = "padding: 10px; background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 5px; margin-bottom: 10px;",
           HTML("
-            <p><strong>Instructions:</strong></p>
             <ul>
               <li>Hover over a point to see gene info.</li>
               <li>Click once on a gene to add a specific gene label. This label will be shown even if you turn off default labels.</li>
               <li>Click again on a gene to remove its label altogether. You can always add the label back by clicking again.</li>
+              <li>Go to the Advanced panel to add more genes to label. These can't be removed by clicking.</li>
             </ul>
           ")
         )
@@ -160,6 +172,7 @@ server <- function(input, output, session) {
   logfc <- reactive(input$logfc)
   pval <- reactive(input$pval)
   overlap <- reactive(input$overlap)
+  labelsize <- reactive(input$labelsize)
   
   # For colors, issue warning if color is not valid
   upcolor <- reactive({
@@ -180,6 +193,13 @@ server <- function(input, output, session) {
     req(validcolor)
     input$midcolor
     })
+  labelcolor <- reactive({
+    validcolor <- is_valid_color(input$labelcolor)
+    shinyFeedback::feedbackWarning("labelcolor", !validcolor, "Please select a valid color or HEX code")
+    req(validcolor)
+    input$labelcolor
+  })
+  
   
   # Toggle switch for showing default labels
   show_labels <- reactiveVal(TRUE)
@@ -188,27 +208,60 @@ server <- function(input, output, session) {
   })
   
   # Make reactive lists to store specific genes to label and specific genes to remove
+  clicked_on_genes <- reactiveVal(c())
   genes_to_label <- reactiveVal(c())
   remove_labels <- reactiveVal(c())
   
-  # Observe clicks on the plot and add clicked genes to genes_to_label
+  # Process user input to handle comma, space, and newline separation
+  observeEvent(input$gene_input, {
+    # Split input by comma, space, and newline, and remove empty strings
+    input_text <- gsub("\n", " ", input$gene_input)
+    input_genes <- unlist(strsplit(input$gene_input, "[,\n]+"))
+    input_genes <- trimws(input_genes)
+    input_genes <- input_genes[input_genes != ""]
+    
+    # Update genes_to_label dynamically
+    # Genes to label should include all genes in the text input, 
+    # As well as all genes that are currently clicked on
+    all_genes <- unique(c(input_genes, clicked_on_genes()))
+    genes_to_label(all_genes)
+  })
+  
+  # Observe clicks on the plot
   observeEvent(input$plot_click, {
     click_info <- nearPoints(data(), input$plot_click, xvar = "avg_log2FC", yvar = "neg_log10_pval")
     if (nrow(click_info) > 0) {
       clicked_gene <- click_info$gene[1]
-      # If the gene is already in genes_to_label, move it to "remove_labels"
-      if (clicked_gene %in% genes_to_label()) {
-        updated_labels <- setdiff(genes_to_label(), clicked_gene)
-        genes_to_label(updated_labels)
-        updated_removals <- unique(c(remove_labels(), clicked_gene))
-        remove_labels(updated_removals)
-      } else { # If gene is not in genes_to_label, add it 
-        updated_genes <- unique(c(genes_to_label(), clicked_gene))
-        genes_to_label(updated_genes)
+      current_clicked_genes <- clicked_on_genes() # Get list of genes that are already clicked on
+      
+      # Get the current list of genes in genes_to_label (both from input and clicks)
+      current_genes_to_label <- genes_to_label()
+      input_text <- gsub("\n", " ", input$gene_input)
+      input_genes <- unlist(strsplit(input$gene_input, "[,\n]+"))
+      input_genes <- trimws(input_genes)
+      input_genes <- input_genes[input_genes != ""]
+      
+      # If the gene is not already in the list of clicked "on" genes OR in the input genes, add it
+      # Note: you have to make sure the gene isn't already in the text input to avoid wonkiness
+      if (!(clicked_gene %in% current_clicked_genes || clicked_gene %in% input_genes)) {
+        clicked_on_genes(unique(c(current_clicked_genes, clicked_gene)))
+        # If gene is already in current_clicked_genes, but not in input_genes, remove it
+        # Also update remove_genes
+      } else if (clicked_gene %in% current_clicked_genes && !(clicked_gene %in% input_genes)) { 
+        clicked_on_genes(setdiff(current_clicked_genes, clicked_gene))
+        remove_labels(c(remove_labels, clicked_gene))
       }
+      
+      # Update genes_to_label with input genes and clicked "on" genes
+      all_genes <- unique(c(input_genes, clicked_on_genes()))
+      genes_to_label(all_genes)
+
+      
     }
   })
   
+  
+  # Render the plot
   output$plot <- renderPlot(
     width = function() input$width,
     height = function() input$height,
@@ -223,14 +276,21 @@ server <- function(input, output, session) {
                  downcolor = downcolor(), 
                  midcolor = midcolor(),
                  genes_to_label = genes_to_label(),
-                 remove_labels = remove_labels())
+                 remove_labels = remove_labels(),
+                 labelcolor = labelcolor(),
+                 labelsize = labelsize())
   })
   
+  # Render the table
   output$data <- renderTable({
-    req(input$plot_hover)
-    nearPoints(data(), input$plot_hover, xvar = "avg_log2FC", yvar = "neg_log10_pval")
+    selected_data <- nearPoints(data(), input$plot_hover, xvar = "avg_log2FC", yvar = "neg_log10_pval")
+    # Format p values in scientific notation
+    selected_data$p_val_adj <- format(selected_data$p_val_adj, scientific = TRUE, digits = 3)
+    selected_data$p_val <- format(selected_data$p_val, scientific = TRUE, digits = 3)
+    selected_data
   })
   
+  # Render the figure for download
   output$download <- downloadHandler(
     filename = function() {
       paste("plot", Sys.Date(), ".", input$filetype, sep = "")
@@ -244,7 +304,11 @@ server <- function(input, output, session) {
                                        p_val_cutoff = pval(),
                                        upcolor = upcolor(), 
                                        downcolor = downcolor(), 
-                                       midcolor = midcolor())
+                                       midcolor = midcolor(),
+                                       genes_to_label = genes_to_label(),
+                                       remove_labels = remove_labels(),
+                                       labelcolor = labelcolor(),
+                                       labelsize = labelsize())
             , device = input$filetype, width = input$width / 100, height = input$height / 100)
     }
   )
