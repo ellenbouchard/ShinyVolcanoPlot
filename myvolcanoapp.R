@@ -7,6 +7,7 @@ library(shiny)
 library(ggplot2)
 library(ggrepel)
 
+### FUNCTIONS
 make_volcano = function( 
     de, 
     log_fc_cutoff = 0.05, 
@@ -43,8 +44,7 @@ make_volcano = function(
   de$name[de$name %in% remove_labels] <- ""
   if(label_specific_genes) {de <- de %>% mutate(name_specific = ifelse(gene  %in% genes_to_label & reg != "",gene, ""))}    
   
-  
-  plot = ggplot(data=de, aes(x=avg_log2FC, y=-log10(p_val_adj), col=reg, label=name)) + 
+  plot = ggplot(data=de, aes(x=avg_log2FC, y=neg_log10_pval, col=reg, label=name)) + 
     geom_point(color = 'black', size = 2.5) + 
     theme_minimal() +
     scale_color_manual(breaks = c("DOWN", "", "UP"),values=c(downcolor, midcolor, upcolor)) + 
@@ -58,9 +58,21 @@ make_volcano = function(
   
   return(plot)
 }
+# Function for determining if input color is valid
+is_valid_color <- function(color) {
+  tryCatch({
+    grDevices::col2rgb(color)
+    TRUE
+  }, error = function(e) {
+    FALSE
+  })
+}
 
-# Define UI for application that draws a histogram
+## SHINY APP
+
+# Define UI for application
 ui <- fluidPage(
+  shinyFeedback::useShinyFeedback(),
   titlePanel("Volcano Plot"),
   
   sidebarLayout(
@@ -76,16 +88,23 @@ ui <- fluidPage(
       h4("Colors"),
       textInput("upcolor","Upregulated Genes", value = "Yellow"),
       textInput("downcolor","DownregulatedGenes",value = "Blue"),
-      textInput("midcolor","Non-significant Genes", value = "Grey")
-      
+      textInput("midcolor","Non-significant Genes", value = "Grey"),
+      h4("Size"),
+      sliderInput("height", "height", min = 100, max = 1000, value = 500),
+      sliderInput("width", "width", min = 100, max = 1000, value = 500),
+      h4("Download Your Plot"),
+      selectInput("filetype", "Select File Type", choices = c("png","jpg","svg"), selected = "png"),
+      downloadButton("download")
     ),
     mainPanel(
-      plotOutput("plot")
+      plotOutput("plot", hover = "plot_hover"),
+      tableOutput("data")
     )
   )
 )
 
 server <- function(input, output, session) {
+  # Process the input dataframe
   data <- reactive({
     req(input$upload)
     ext <- tools::file_ext(input$upload$name)
@@ -93,7 +112,12 @@ server <- function(input, output, session) {
            csv = vroom::vroom(input$upload$datapath, delim = ","),
            validate("Invalid file; Please upload a .csv file")
     )
+    df <- read.csv(input$upload$datapath)
+    df$neg_log10_pval <- -log10(df$p_val_adj)
+    return(df)
   })
+  
+  # Define input variables
   title <- reactive(input$title)
   
   logfc <- reactive(input$logfc)
@@ -101,9 +125,24 @@ server <- function(input, output, session) {
   
   overlap <- reactive(input$overlap)
   
-  upcolor <- reactive(input$upcolor)
-  downcolor <- reactive(input$downcolor)
-  midcolor <- reactive(input$midcolor)
+  upcolor <- reactive({
+    validcolor <- is_valid_color(input$upcolor)
+    shinyFeedback::feedbackWarning("upcolor", !validcolor, "Please select a valid color or HEX code")
+    req(validcolor)
+    input$upcolor
+    })
+  downcolor <- reactive({
+    validcolor <- is_valid_color(input$downcolor)
+    shinyFeedback::feedbackWarning("downcolor", !validcolor, "Please select a valid color or HEX code")
+    req(validcolor)
+    input$downcolor
+  })
+  midcolor <- reactive({
+    validcolor <- is_valid_color(input$midcolor)
+    shinyFeedback::feedbackWarning("midcolor", !validcolor, "Please select a valid color or HEX code")
+    req(validcolor)
+    input$midcolor
+    })
   
   
   # Toggle switch for showing labels
@@ -112,7 +151,10 @@ server <- function(input, output, session) {
     show_labels(!show_labels())
   })
   
-  output$plot <- renderPlot({
+  output$plot <- renderPlot(
+    width = function() input$width,
+    height = function() input$height,
+    {
     make_volcano(data(), 
                  graph_title = title(),
                  overlap_metric = overlap(),
@@ -123,6 +165,29 @@ server <- function(input, output, session) {
                  downcolor = downcolor(), 
                  midcolor = midcolor())
   })
+  
+  output$data <- renderTable({
+    req(input$plot_hover)
+    nearPoints(data(), input$plot_hover, xvar = "avg_log2FC", yvar = "neg_log10_pval")
+  })
+  
+  output$download <- downloadHandler(
+    filename = function() {
+      paste("plot", Sys.Date(), ".", input$filetype, sep = "")
+    },
+    content = function(file) {
+      ggsave(file, plot = make_volcano(data(), 
+                                       graph_title = title(),
+                                       overlap_metric = overlap(),
+                                       label_genes = show_labels(),
+                                       log_fc_cutoff = logfc(), 
+                                       p_val_cutoff = pval(),
+                                       upcolor = upcolor(), 
+                                       downcolor = downcolor(), 
+                                       midcolor = midcolor())
+            , device = input$filetype, width = input$width / 100, height = input$height / 100)
+    }
+  )
 }
 
 # Run the application 
