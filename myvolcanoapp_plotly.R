@@ -31,9 +31,6 @@ process_for_volcano = function(de,
   min_p_val <- min(de$p_val_adj[de$p_val_adj > 0])
   de$p_val_adj[de$p_val_adj == 0] <- min_p_val*0.1
   
-  # Calculate -log10 pvalue and add as column. This is necessary for hover and click behaviors.
-  de$neg_log10_pval <- -log10(de$p_val_adj)
-  
   # Label genes as significantly "UP" or "DOWN" based on p val and logFC thresholds
   de$reg = ""
   de$reg[de$p_val_adj < p_val_cutoff & de$avg_log2FC > up_cutoff & de$avg_log2FC > 0] <- "UP"
@@ -177,7 +174,7 @@ make_volcano_plotly = function(
     plot <- plot %>% add_annotations(
       x = annot_de_click$avg_log2FC,
       y = annot_de_click$neg_log10_pval,
-      text = annot_de_click$name2,
+      text = annot_de_click$gene,
       xref = "x",
       yref = "y",
       showarrow = TRUE,
@@ -299,7 +296,7 @@ ui <- fluidPage(
                                height = "100px"),
                  numericInput("labelsize2", "Label Font Size", value = 10),
                  textInput("labelcolor2", "Label Font Color", value = "Red"),
-                 sliderInput("space", "Space between line and point", min = 0, max = 10, value = 5)
+                 sliderInput("space", "Space between line and point", min = 0, max = 10, value = 10)
         ),
         tabPanel("Download",
                  h4("Download Your Plot"),
@@ -358,6 +355,8 @@ server <- function(input, output, session) {
     # Stop processing if required columns are missing
     validate(need(length(missing_cols) == 0, ""))
     
+    # Calculate -log10 pvalue and add as column. This is necessary for hover and click behaviors.
+    df$neg_log10_pval <- -log10(df$p_val_adj)
     return(df)
   })
   
@@ -431,9 +430,59 @@ server <- function(input, output, session) {
   # Make reactive lists to store specific genes to label
   genes_to_label_1 <- reactiveVal(c())
   genes_to_label_2 <- reactiveVal(c())
-  genes_to_label_click <- reactiveVal(c())
+  genes_to_label_click <- reactiveVal(data.frame(gene = character(), x = numeric(), y = numeric()))
   
-  # Process gene input 1
+ # Observe plotly click events
+  observeEvent(event_data("plotly_click"), {
+    click_data <- event_data("plotly_click")
+    req(click_data)
+    
+    # DEBUG: print click data
+    print("Click Registered")
+    print(click_data)
+    
+    # Get clicked gene info
+    clicked_gene <- data() %>%
+      filter(avg_log2FC == click_data$x & neg_log10_pval == click_data$y) %>%
+      select(gene) %>%
+      pull()
+    
+    # DEBUG: print clicked gene
+    print("Clicked on a gene: ")
+    print(clicked_gene)
+    
+    # Append clicked gene information 
+    if(length(clicked_gene) > 0) { # If the click successfully pulled a gene:
+      # If the gene is not in genes_to_label_click OR in other gene input lists,
+      # Add the gene to genes_to_label_click
+      if(!(clicked_gene %in% genes_to_label_click()$gene ||
+           clicked_gene %in% genes_to_label_1() ||
+           clicked_gene %in% genes_to_label_2())) {
+        updated_data <- rbind(genes_to_label_click(),
+                              data.frame(gene = clicked_gene,
+                                         x = click_data$x,
+                                         y = click_data$y))
+        genes_to_label_click(updated_data)
+        # Debug: Print genes_to_label_click after addition
+        print("Added gene:")
+        print(genes_to_label_click())
+        # If the gene is already in genes_to_label_click AND NOT in the other lists,
+        # remove it: 
+      } else if (clicked_gene %in% genes_to_label_click()$gene &&
+                 !(clicked_gene %in% genes_to_label_1()) &&
+                 !(clicked_gene %in% genes_to_label_2())) {
+        updated_data_2 <- genes_to_label_click() %>%
+          filter(gene != clicked_gene)
+        genes_to_label_click(updated_data_2)
+        # Debug: Print genes_to_label_click after removal
+        print("Removed gene:")
+        print(genes_to_label_click())
+      }
+
+    }
+  }, ignoreNULL = FALSE)
+  
+   # Process gene input 1
   observeEvent(input$gene_input_1, {
     # Split input by comma and remove empty strings
     input_genes <- unlist(strsplit(input$gene_input_1, "[,\n]+"))
@@ -461,7 +510,7 @@ server <- function(input, output, session) {
                                 p_val_cutoff = pval(),
                                 genes_to_label_1 = genes_to_label_1(),
                                 genes_to_label_2 = genes_to_label_2(),
-                                genes_to_label_click = genes_to_label_click())
+                                genes_to_label_click = genes_to_label_click()$gene)
     annot_de_1 <- de[de$name1 != "", ]
     annot_de_2 <- de[de$name2 != "", ]
     annot_de_click <- de[de$nameclick != "", ]
