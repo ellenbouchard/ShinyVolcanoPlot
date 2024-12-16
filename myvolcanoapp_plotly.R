@@ -8,6 +8,7 @@ library(ggplot2)
 library(ggrepel)
 library(dplyr)
 library(plotly)
+library(shinyjs)
 
 ### FUNCTIONS
 
@@ -127,6 +128,11 @@ make_volcano_plotly = function(
                   colors = colors_pal) %>%
             config(editable = TRUE)
   
+  # Add thresholds if toggled on
+  if(visible_cutoffs) {
+    plot <- plot %>% layout(shapes = list(hline(-log10(p_val_cutoff)), vline(up_cutoff), vline(down_cutoff)))
+  }
+  
   # Add annotations 1
   if(nrow(annot_de_1) > 0) {
     plot <- plot %>% add_annotations(
@@ -140,8 +146,8 @@ make_volcano_plotly = function(
       arrowsize = 0,
       arrowwidth = 1,
       standoff = pointsize + (space - 2),
-      ax = 20,
-      ay = -20,
+      ax = annot_de_1$ax,
+      ay = annot_de_1$ay,
       font = list(color = labelcolor1,
                   size = labelsize1),
       showlegend = FALSE
@@ -161,8 +167,8 @@ make_volcano_plotly = function(
       arrowsize = 0,
       arrowwidth = 1,
       standoff = pointsize + (space - 2),
-      ax = 20,
-      ay = -20,
+      ax = annot_de_2$ax,
+      ay = annot_de_2$ay,
       font = list(color = labelcolor2,
                   size = labelsize2),
       showlegend = FALSE
@@ -174,7 +180,7 @@ make_volcano_plotly = function(
     plot <- plot %>% add_annotations(
       x = annot_de_click$avg_log2FC,
       y = annot_de_click$neg_log10_pval,
-      text = annot_de_click$gene,
+      text = annot_de_click$nameclick,
       xref = "x",
       yref = "y",
       showarrow = TRUE,
@@ -182,8 +188,8 @@ make_volcano_plotly = function(
       arrowsize = 0,
       arrowwidth = 1,
       standoff = pointsize + (space - 2),
-      ax = 20,
-      ay = -20,
+      ax = annot_de_click$ax,
+      ay = annot_de_click$ay,
       font = list(color = labelcolorclick,
                   size = labelsizeclick),
       showlegend = FALSE
@@ -207,6 +213,7 @@ make_volcano_plotly = function(
         showlegend = FALSE,
         hoverinfo = "none"
       )
+    
   } # Add markers
   plot <- plot %>% 
      add_trace(
@@ -225,19 +232,16 @@ make_volcano_plotly = function(
   # Finalize layout
   plot <- plot %>% layout(title = graph_title, 
                           xaxis = list(
+                            title = 'Log2 Fold Change',
                             showgrid = FALSE,
                             zeroline = FALSE 
                           ),
                           yaxis = list(
+                            title = '-log10 Adjusted P Value',
                             showgrid = FALSE,
                             zeroline = FALSE  
                           ),
                           dragmode = FALSE)
-  # Add thresholds if toggled on
-  if(visible_cutoffs) {
-    plot <- plot %>% layout(shapes = list(hline(-log10(p_val_cutoff)), vline(up_cutoff), vline(down_cutoff)))
-  }
-  
   return(plot)
 }
 
@@ -251,6 +255,8 @@ is_valid_color <- function(color) {
     FALSE
   })
 }
+
+
 
 ## SHINY APP
 
@@ -286,23 +292,26 @@ ui <- fluidPage(
                  sliderInput("pointsize", "Point Size", min = 1, max = 15, value = 5)
         ),
         tabPanel("Labels", 
+                 h4("Edit Labels Added by Clicking"),
+                 numericInput("labelsizeclick", "Label Font Size", value = 10),
+                 textInput("labelcolorclick", "Label Font Color", value = "Black"),
                  h4("Add Labels by Entering Gene Names"),
                  textAreaInput("gene_input_1", "Enter Gene Names (comma or newline separated)",
                                height = "100px"),
                  numericInput("labelsize1", "Label Font Size", value = 10),
-                 textInput("labelcolor1", "Label Font Color", value = "Black"),
+                 textInput("labelcolor1", "Label Font Color", value = "Red"),
                  h4("Add Secondary Labels"),
                  textAreaInput("gene_input_2", "Enter Gene Names (comma or newline separated)",
                                height = "100px"),
                  numericInput("labelsize2", "Label Font Size", value = 10),
-                 textInput("labelcolor2", "Label Font Color", value = "Red"),
-                 sliderInput("space", "Space between line and point", min = 0, max = 10, value = 10)
+                 textInput("labelcolor2", "Label Font Color", value = "Blue"),
+                 sliderInput("space", "Space between line and point", min = 0, max = 10, value = 5)
         ),
         tabPanel("Download",
                  h4("Download Your Plot"),
                  selectInput("filetype", "Select File Type", choices = c("png","jpg","svg"), selected = "png"),
                  downloadButton("download")
-        ),
+        )
       )
     ),
     mainPanel(
@@ -312,7 +321,10 @@ ui <- fluidPage(
           style = "padding: 10px; background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 5px; margin-bottom: 10px;",
           HTML("
             <ul>
+              <li>Upload a .csv file with your differential expression results.</li>
               <li>Hover over a point to see gene info.</li>
+              <li>Click on a point to add a label. Click again to remove.</li>
+              <li>Enter gene names in the Labels tab to add labels. These can't be removed by clicking.</li>
               <li>Drag and drop labels to reposition.</li>
             </ul>
           ")
@@ -366,6 +378,7 @@ server <- function(input, output, session) {
   pval <- debounce(reactive(input$pval), millis = 300)
   labelsize1 <- debounce(reactive(input$labelsize1), millis = 300)
   labelsize2 <- debounce(reactive(input$labelsize2), millis = 300)
+  labelsizeclick <- debounce(reactive(input$labelsizeclick), millis = 3000)
   pointsize <- debounce(reactive(input$pointsize), millis = 300)
   height <- debounce(reactive(input$height), millis = 300)
   width <- debounce(reactive(input$width), millis = 300)
@@ -402,6 +415,12 @@ server <- function(input, output, session) {
     req(validcolor)
     input$labelcolor2
   })
+  labelcolorclick <- reactive({
+    validcolor <- is_valid_color(trimws(input$labelcolorclick))
+    shinyFeedback::feedbackWarning("labelcolorclick", !validcolor, "Please select a valid color or HEX code")
+    req(validcolor)
+    input$labelcolorclick
+  })
   outlinecolor <- reactive({
     validcolor <- is_valid_color(trimws(input$outlinecolor))
     shinyFeedback::feedbackWarning("outlinecolor", !validcolor, "Please select a valid color or HEX code")
@@ -430,55 +449,42 @@ server <- function(input, output, session) {
   # Make reactive lists to store specific genes to label
   genes_to_label_1 <- reactiveVal(c())
   genes_to_label_2 <- reactiveVal(c())
-  genes_to_label_click <- reactiveVal(data.frame(gene = character(), x = numeric(), y = numeric()))
+  genes_to_label_click <- reactiveVal(c())
+  
+  # Make reactive dataframe to store just position information (ax and ay) of all annotation layers
+  # This is necessary for retaining position of labels that are repositioned by the user 
+  all_annotations_positions <- reactiveVal(data.frame(gene = character(), ax = numeric(), ay = numeric()))
   
  # Observe plotly click events
-  observeEvent(event_data("plotly_click"), {
+  # priority must be set to "event" or else Plotly will ignore multiple clicks in the same spot
+  observeEvent(event_data("plotly_click", priority = "event"), {
     click_data <- event_data("plotly_click")
     req(click_data)
-    
-    # DEBUG: print click data
-    print("Click Registered")
-    print(click_data)
     
     # Get clicked gene info
     clicked_gene <- data() %>%
       filter(avg_log2FC == click_data$x & neg_log10_pval == click_data$y) %>%
       select(gene) %>%
       pull()
-    
-    # DEBUG: print clicked gene
-    print("Clicked on a gene: ")
-    print(clicked_gene)
-    
+
     # Append clicked gene information 
     if(length(clicked_gene) > 0) { # If the click successfully pulled a gene:
       # If the gene is not in genes_to_label_click OR in other gene input lists,
       # Add the gene to genes_to_label_click
-      if(!(clicked_gene %in% genes_to_label_click()$gene ||
+      if(!(clicked_gene %in% genes_to_label_click() ||
            clicked_gene %in% genes_to_label_1() ||
            clicked_gene %in% genes_to_label_2())) {
-        updated_data <- rbind(genes_to_label_click(),
-                              data.frame(gene = clicked_gene,
-                                         x = click_data$x,
-                                         y = click_data$y))
+        updated_data <- c(genes_to_label_click(), clicked_gene)
         genes_to_label_click(updated_data)
-        # Debug: Print genes_to_label_click after addition
-        print("Added gene:")
-        print(genes_to_label_click())
+
         # If the gene is already in genes_to_label_click AND NOT in the other lists,
         # remove it: 
-      } else if (clicked_gene %in% genes_to_label_click()$gene &&
+      } else if (clicked_gene %in% genes_to_label_click() &&
                  !(clicked_gene %in% genes_to_label_1()) &&
                  !(clicked_gene %in% genes_to_label_2())) {
-        updated_data_2 <- genes_to_label_click() %>%
-          filter(gene != clicked_gene)
+        updated_data_2 <- setdiff(genes_to_label_click(), clicked_gene)
         genes_to_label_click(updated_data_2)
-        # Debug: Print genes_to_label_click after removal
-        print("Removed gene:")
-        print(genes_to_label_click())
       }
-
     }
   }, ignoreNULL = FALSE)
   
@@ -490,6 +496,8 @@ server <- function(input, output, session) {
     input_genes <- input_genes[input_genes != ""]
     # Update genes_to_label dynamically
     genes_to_label_1(input_genes)
+    # If any gene is in genes_to_label_click(), remove it 
+    genes_to_label_click(setdiff(genes_to_label_click(), genes_to_label_1()))
   })
   
   # Process gene input 2
@@ -500,22 +508,63 @@ server <- function(input, output, session) {
     input_genes <- input_genes[input_genes != ""]
     # Update genes_to_label dynamically 
     genes_to_label_2(input_genes)
+    # If any gene is in genes_to_label_click(), remove it 
+    genes_to_label_click(setdiff(genes_to_label_click(), genes_to_label_2()))
   })
   
   # Render the plot
   output$plot <- renderPlotly(
     {
+      # First, process data
+      # This has to be done every time to account for multiple annotation layers
     de <- process_for_volcano(de = data(),
                                 log_fc_cutoff = logfc(),
                                 p_val_cutoff = pval(),
                                 genes_to_label_1 = genes_to_label_1(),
                                 genes_to_label_2 = genes_to_label_2(),
-                                genes_to_label_click = genes_to_label_click()$gene)
+                                genes_to_label_click = genes_to_label_click())
+    
+    # Generate dataframes for lists of labeled genes
     annot_de_1 <- de[de$name1 != "", ]
     annot_de_2 <- de[de$name2 != "", ]
     annot_de_click <- de[de$nameclick != "", ]
     
+    # Start by populating annotation dataframes with default label positions (ax  = 20 and ay = -20)
+    # Then, merge each annotation dataframe with all_annotations_positison()
+    # such that if a label already has a non-default position on the plot, it's retained
+    if(nrow(annot_de_1) > 0) {
+      annot_de_1$ax <- 20
+      annot_de_1$ay <- -20
+      merged1 <- merge(annot_de_1, all_annotations_positions(), by.x = "name1", by.y = "gene", all.x = TRUE)
+      merged1$ax <- ifelse(is.na(merged1$ax.y), merged1$ax.x, merged1$ax.y)
+      merged1$ay <- ifelse(is.na(merged1$ay.y), merged1$ay.x, merged1$ay.y)
+      annot_de_1 <- merged1 %>% arrange(desc(neg_log10_pval))
+    }
+    if(nrow(annot_de_2) > 0) {
+      annot_de_2$ax <- 20
+      annot_de_2$ay <- -20
+      merged2 <- merge(annot_de_2, all_annotations_positions(), by.x = "name2", by.y = "gene", all.x = TRUE)
+      merged2$ax <- ifelse(is.na(merged2$ax.y), merged2$ax.x, merged2$ax.y)
+      merged2$ay <- ifelse(is.na(merged2$ay.y), merged2$ay.x, merged2$ay.y)
+      annot_de_2 <- merged2 %>% arrange(desc(neg_log10_pval))
+    }
+    if(nrow(annot_de_click) > 0) {
+      annot_de_click$ax <- 20
+      annot_de_click$ay <- -20
+      mergedclick <- merge(annot_de_click, all_annotations_positions(), by.x = "nameclick", by.y = "gene", all.x = TRUE)
+      mergedclick$ax <- ifelse(is.na(mergedclick$ax.y), mergedclick$ax.x, mergedclick$ax.y)
+      mergedclick$ay <- ifelse(is.na(mergedclick$ay.y), mergedclick$ay.x, mergedclick$ay.y)
+      annot_de_click <- mergedclick %>% arrange(desc(neg_log10_pval))
+    }
     
+    # Update all_annotations_positions with newly added annotations
+    if(nrow(annot_de_1) > 0 || nrow(annot_de_2) > 0 || nrow(annot_de_click) > 0) {
+      aap <- bind_rows(annot_de_1, annot_de_2, annot_de_click)
+      aap <- aap %>% select(gene, ax, ay)
+      all_annotations_positions(aap)
+    }
+    
+    # Finally, make the plot
     p <- make_volcano_plotly(
                  de,
                  annot_de_1,
@@ -531,6 +580,8 @@ server <- function(input, output, session) {
                  labelsize1 = labelsize1(),
                  labelcolor2 = labelcolor2(),
                  labelsize2 = labelsize2(),
+                 labelcolorclick = labelcolorclick(),
+                 labelsizeclick = labelsizeclick(),
                  pointsize = pointsize(),
                  visible_cutoffs = show_cutoffs(),
                  show_outlines = show_outlines(),
@@ -539,32 +590,54 @@ server <- function(input, output, session) {
                  width = width(),
                  space = space(),
                  threshold_color = thresholdcolor())
+    p
     
+    })
+  
+  # Observe events
+  # This is where we check to see if the user has clicked and dragged a label to reposition
+  observeEvent(event_data("plotly_relayout"), {
+    relayout_data <- event_data("plotly_relayout")
+    req(relayout_data)
+    
+    # Check if names in relayout_data start with "annotations"
+    annotation_names <- names(relayout_data)
+    annotation_indices <- grep("^annotations\\[[0-9]+\\]", annotation_names)
+    
+    if(length(annotation_indices) > 0) {
+      for(index in annotation_indices) {
+        name <- annotation_names[index]
+        # Extract index number
+        i <- as.numeric(sub("annotations\\[([0-9]+)\\]\\..*", "\\1", name))
+        
+        # Extract ax and ay values
+        if(grepl("\\.ax$", name)) {
+          ax_value <- relayout_data[[name]]
+          all_annotations_positions()
+        } else if (grepl("\\.ay$", name)) {
+          ay_value <- relayout_data[[name]]
+        }
+      }
+      # Update all_annotations_positions with new position info
+      aap <- all_annotations_positions()
+      aap$ax[i + 1] <- ax_value
+      aap$ay[i + 1] <- ay_value
+      all_annotations_positions(aap)
+    } 
   })
   
   # Render the figure for download
-#  output$download <- downloadHandler(
-#    filename = function() {
-#      paste("plot", Sys.Date(), ".", input$filetype, sep = "")
-#    },
-#    content = function(file) {
-#      ggsave(file, plot = make_volcano(data(), 
-#                                       graph_title = title(),
-#                                      overlap_metric = overlap(),
-#                                       label_genes = show_labels(),
-#                                       log_fc_cutoff = logfc(), 
-#                                       p_val_cutoff = pval(),
-#                                       upcolor = upcolor(), 
-#                                      downcolor = downcolor(), 
-#                                       midcolor = midcolor(),
-#                                       genes_to_label = genes_to_label(),
-#                                       remove_labels = remove_labels(),
-#                                      labelcolor = labelcolor(),
-#                                       labelsize = labelsize())
-#            , device = input$filetype, width = input$width / 100, height = input$height / 100)
-#    }
-#  )
-}
+  #  output$download <- downloadHandler(
+  #    filename = function() {
+  #      paste("plot", Sys.Date(), ".", input$filetype, sep = "")
+  #    },
+  #    content = function(file) {
+  ## CODE TO SAVE PLOT
+  #    })
+  
+} # End of server function
+  
+    
 
 # Run the application 
 shinyApp(ui = ui, server = server)
