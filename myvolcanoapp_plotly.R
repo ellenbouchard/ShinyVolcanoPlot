@@ -28,9 +28,8 @@ process_for_volcano = function(de,
   up_cutoff <- log_fc_cutoff
   down_cutoff <- -1 * log_fc_cutoff
   
-  # Change p values of zero so that they can show up on the graph
-  min_p_val <- min(de$p_val_adj[de$p_val_adj > 0])
-  de$p_val_adj[de$p_val_adj == 0] <- min_p_val*0.1
+  # For adjusted p values of zero, change neg_log10_pval so that it is not infinite
+  de$neg_log10_pval[de$p_val_adj == 0] <- -log10(.Machine$double.xmin)
   
   # Label genes as significantly "UP" or "DOWN" based on p val and logFC thresholds
   de$reg = ""
@@ -82,7 +81,8 @@ make_volcano_plotly = function(
     outline_color = "black",
     height = 500,
     width = 400,
-    space = 5) {
+    space = 5,
+    download.filetype = "png") {
   
   up_cutoff <- log_fc_cutoff
   down_cutoff <- -1 * log_fc_cutoff
@@ -126,7 +126,14 @@ make_volcano_plotly = function(
                   y = ~neg_log10_pval,
                   color = ~reg, 
                   colors = colors_pal) %>%
-            config(editable = TRUE)
+            config(editable = TRUE, 
+                   displaylogo = FALSE, 
+                   modeBarButtonsToRemove = c(
+                     'sendDataToCloud', 'autoScale2d', 'resetScale2d', 'toggleSpikelines',
+                     'hoverClosestCartesian', 'hoverCompareCartesian',
+                     'zoom2d','pan2d','select2d','lasso2d','zoomIn2d','zoomOut2d'
+                   ),
+                   toImageButtonOptions = list(format = download.filetype))
   
   # Add thresholds if toggled on
   if(visible_cutoffs) {
@@ -308,9 +315,8 @@ ui <- fluidPage(
                  sliderInput("space", "Space between line and point", min = 0, max = 10, value = 5)
         ),
         tabPanel("Download",
-                 h4("Download Your Plot"),
-                 selectInput("filetype", "Select File Type", choices = c("png","jpg","svg"), selected = "png"),
-                 downloadButton("download")
+                 h4("Click the camera icon on your plot to download"),
+                 selectInput("filetype", "Select File Type", choices = c("png","svg"), selected = "png"),
         )
       )
     ),
@@ -383,6 +389,7 @@ server <- function(input, output, session) {
   height <- debounce(reactive(input$height), millis = 300)
   width <- debounce(reactive(input$width), millis = 300)
   space <- debounce(reactive(input$space), millis = 300)
+  filetype <- debounce(reactive(input$filetype), millis = 300)
   
   # For colors, issue warning if color is not valid
   upcolor <- reactive({
@@ -589,8 +596,9 @@ server <- function(input, output, session) {
                  height = height(),
                  width = width(),
                  space = space(),
-                 threshold_color = thresholdcolor())
-    p
+                 threshold_color = thresholdcolor(),
+                 download.filetype = filetype())
+    return(p)
     
     })
   
@@ -627,13 +635,15 @@ server <- function(input, output, session) {
   })
   
   # Render the figure for download
-  #  output$download <- downloadHandler(
-  #    filename = function() {
-  #      paste("plot", Sys.Date(), ".", input$filetype, sep = "")
-  #    },
-  #    content = function(file) {
+    output$download <- downloadHandler(
+      filename = function() {
+        #paste("plot", Sys.Date(), ".", input$filetype, sep = "")
+        paste("plot", Sys.Date(), ".html", sep = "")
+      },
+      content = function(file) {
   ## CODE TO SAVE PLOT
-  #    })
+        
+      })
   
 } # End of server function
   
