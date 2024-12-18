@@ -52,7 +52,6 @@ process_for_volcano = function(de,
                                              !(gene %in% genes_to_label_1 | gene %in% genes_to_label_2), 
                                            gene, ""))
     }
-  
   return(de)
 }
 
@@ -316,7 +315,7 @@ ui <- fluidPage(
         ),
         tabPanel("Download",
                  h4("Click the camera icon on your plot to download"),
-                 selectInput("filetype", "Select File Type", choices = c("png","svg"), selected = "png"),
+                 selectInput("filetype", "Select File Type", choices = c("png","svg"), selected = "png")
         )
       )
     ),
@@ -458,10 +457,6 @@ server <- function(input, output, session) {
   genes_to_label_2 <- reactiveVal(c())
   genes_to_label_click <- reactiveVal(c())
   
-  # Make reactive dataframe to store just position information (ax and ay) of all annotation layers
-  # This is necessary for retaining position of labels that are repositioned by the user 
-  all_annotations_positions <- reactiveVal(data.frame(gene = character(), ax = numeric(), ay = numeric()))
-  
  # Observe plotly click events
   # priority must be set to "event" or else Plotly will ignore multiple clicks in the same spot
   observeEvent(event_data("plotly_click", priority = "event"), {
@@ -519,86 +514,165 @@ server <- function(input, output, session) {
     genes_to_label_click(setdiff(genes_to_label_click(), genes_to_label_2()))
   })
   
-  # Render the plot
-  output$plot <- renderPlotly(
-    {
-      # First, process data
-      # This has to be done every time to account for multiple annotation layers
-    de <- process_for_volcano(de = data(),
+  # Create reactive dataframe for data, using input data
+  de <- reactive({
+    de <- NULL
+    if(!is.null(data())) {
+      de <- process_for_volcano(de = data(),
                                 log_fc_cutoff = logfc(),
                                 p_val_cutoff = pval(),
                                 genes_to_label_1 = genes_to_label_1(),
                                 genes_to_label_2 = genes_to_label_2(),
                                 genes_to_label_click = genes_to_label_click())
-    
-    # Generate dataframes for lists of labeled genes
-    annot_de_1 <- de[de$name1 != "", ]
-    annot_de_2 <- de[de$name2 != "", ]
-    annot_de_click <- de[de$nameclick != "", ]
-    
-    # Start by populating annotation dataframes with default label positions (ax  = 20 and ay = -20)
-    # Then, merge each annotation dataframe with all_annotations_positison()
-    # such that if a label already has a non-default position on the plot, it's retained
-    if(nrow(annot_de_1) > 0) {
-      annot_de_1$ax <- 20
-      annot_de_1$ay <- -20
-      merged1 <- merge(annot_de_1, all_annotations_positions(), by.x = "name1", by.y = "gene", all.x = TRUE)
-      merged1$ax <- ifelse(is.na(merged1$ax.y), merged1$ax.x, merged1$ax.y)
-      merged1$ay <- ifelse(is.na(merged1$ay.y), merged1$ay.x, merged1$ay.y)
-      annot_de_1 <- merged1 %>% arrange(desc(neg_log10_pval))
     }
+    return(de)
+  })
+  
+  # Initialize annotation dataframes as reactive values
+  dataframes <- reactiveValues(
+    all_annotations_positions = reactiveVal(data.frame(gene = character(), ax = numeric(), ay = numeric())),
+    annotations_1 = reactiveVal(data.frame(gene = character(), 
+                                           avg_log2FC = numeric(), 
+                                           p_val_adj = numeric(), 
+                                           neg_log10_pval = numeric(), 
+                                           name1 = character(), 
+                                           ax = numeric(), 
+                                           ay = numeric())),
+    annotations_2 = reactiveVal(data.frame(gene = character(), 
+                                           avg_log2FC = numeric(), 
+                                           p_val_adj = numeric(), 
+                                           neg_log10_pval = numeric(), 
+                                           name2 = character(), 
+                                           ax = numeric(), 
+                                           ay = numeric())),
+    annotations_click = reactiveVal(data.frame(gene = character(), 
+                                           avg_log2FC = numeric(), 
+                                           p_val_adj = numeric(), 
+                                           neg_log10_pval = numeric(), 
+                                           nameclick = character(), 
+                                           ax = numeric(), 
+                                           ay = numeric())),
+  )
+    
+  # Create function to update annotations_1
+  update_annotations_1 <- reactive({
+    annot_de_1 <- de()[de()$name1 != "", ]
+    if(nrow(annot_de_1) > 0) {
+       annot_de_1$ax <- 20
+       annot_de_1$ay <- -20
+       aap <- dataframes$all_annotations_positions
+       # If there are already genes in all_annotations_positions, update annot_de_1 with gene positions
+       if(nrow(aap) > 0) {
+         merged1 <- merge(annot_de_1, aap, by.x = "name1", by.y = "gene", all.x = TRUE)
+         merged1$ax <- ifelse(is.na(merged1$ax.y), merged1$ax.x, merged1$ax.y)
+         merged1$ay <- ifelse(is.na(merged1$ay.y), merged1$ay.x, merged1$ay.y)
+         annot_de_1 <- merged1
+       }
+       # Finish processing annot_de_1 dataframe
+       annot_de_1 <- annot_de_1 %>% arrange(desc(neg_log10_pval))
+       annot_de_1 <- annot_de_1 %>% select(gene, avg_log2FC, p_val_adj, neg_log10_pval, name1, ax, ay)
+    }
+    # Return updated dataframe
+    dataframes$annotations_1 <- annot_de_1
+  })
+  
+  # Create function to update annotations_2
+  update_annotations_2 <- reactive({
+    annot_de_2 <- de()[de()$name2 != "", ]
     if(nrow(annot_de_2) > 0) {
       annot_de_2$ax <- 20
       annot_de_2$ay <- -20
-      merged2 <- merge(annot_de_2, all_annotations_positions(), by.x = "name2", by.y = "gene", all.x = TRUE)
-      merged2$ax <- ifelse(is.na(merged2$ax.y), merged2$ax.x, merged2$ax.y)
-      merged2$ay <- ifelse(is.na(merged2$ay.y), merged2$ay.x, merged2$ay.y)
-      annot_de_2 <- merged2 %>% arrange(desc(neg_log10_pval))
+      aap <- dataframes$all_annotations_positions
+      # If there are already genes in all_annotations_positions, update annot_de_2 with gene positions
+      if(nrow(aap) > 0) {
+        merged2 <- merge(annot_de_2, aap, by.x = "name2", by.y = "gene", all.x = TRUE)
+        merged2$ax <- ifelse(is.na(merged2$ax.y), merged2$ax.x, merged2$ax.y)
+        merged2$ay <- ifelse(is.na(merged2$ay.y), merged2$ay.x, merged2$ay.y)
+        annot_de_2 <- merged2
+      }
+      # Finish processing annot_de_1 dataframe
+      annot_de_2 <- annot_de_2 %>% arrange(desc(neg_log10_pval))
+      annot_de_2 <- annot_de_2 %>% select(gene, avg_log2FC, p_val_adj, neg_log10_pval, name2, ax, ay)
     }
+    # Return updated dataframe
+    dataframes$annotations_2 <- annot_de_2
+  })
+  
+  # Create function to update annotations_click
+  update_annotations_click <- reactive({
+    annot_de_click <- de()[de()$nameclick != "", ]
     if(nrow(annot_de_click) > 0) {
       annot_de_click$ax <- 20
       annot_de_click$ay <- -20
-      mergedclick <- merge(annot_de_click, all_annotations_positions(), by.x = "nameclick", by.y = "gene", all.x = TRUE)
-      mergedclick$ax <- ifelse(is.na(mergedclick$ax.y), mergedclick$ax.x, mergedclick$ax.y)
-      mergedclick$ay <- ifelse(is.na(mergedclick$ay.y), mergedclick$ay.x, mergedclick$ay.y)
-      annot_de_click <- mergedclick %>% arrange(desc(neg_log10_pval))
+      aap <- dataframes$all_annotations_positions
+      # If there are already genes in all_annotations_positions, update annot_de_click with gene positions
+      if(nrow(aap) > 0) {
+        mergedclick <- merge(annot_de_click, aap, by.x = "nameclick", by.y = "gene", all.x = TRUE)
+        mergedclick$ax <- ifelse(is.na(mergedclick$ax.y), mergedclick$ax.x, mergedclick$ax.y)
+        mergedclick$ay <- ifelse(is.na(mergedclick$ay.y), mergedclick$ay.x, mergedclick$ay.y)
+        annot_de_click <- mergedclick
+      }
+      # Finish processing annot_de_1 dataframe
+      annot_de_click <- annot_de_click %>% arrange(desc(neg_log10_pval))
+      annot_de_click <- annot_de_click %>% select(gene, avg_log2FC, p_val_adj, neg_log10_pval, nameclick, ax, ay)
     }
-    
-    # Update all_annotations_positions with newly added annotations
-    if(nrow(annot_de_1) > 0 || nrow(annot_de_2) > 0 || nrow(annot_de_click) > 0) {
-      aap <- bind_rows(annot_de_1, annot_de_2, annot_de_click)
+    # Return updated dataframe
+    dataframes$annotations_click <- annot_de_click
+  })
+  
+  # Create function to update all_annotations_positions
+  update_all_annotations_positions <- reactive({
+    aap <- data.frame(gene = c(), ax = numeric(), ay = numeric())
+    if(nrow(dataframes$annotations_1) > 0 || nrow(dataframes$annotations_2) > 0 || nrow(dataframes$annotations_click > 0)) {
+      aap <- bind_rows(dataframes$annotations_1, dataframes$annotations_2, dataframes$annotations_click)
       aap <- aap %>% select(gene, ax, ay)
-      all_annotations_positions(aap)
     }
-    
-    # Finally, make the plot
-    p <- make_volcano_plotly(
-                 de,
-                 annot_de_1,
-                 annot_de_2,
-                 annot_de_click,
-                 graph_title = title(),
-                 log_fc_cutoff = logfc(), 
-                 p_val_cutoff = pval(),
-                 upcolor = upcolor(), 
-                 downcolor = downcolor(), 
-                 midcolor = midcolor(),
-                 labelcolor1 = labelcolor1(),
-                 labelsize1 = labelsize1(),
-                 labelcolor2 = labelcolor2(),
-                 labelsize2 = labelsize2(),
-                 labelcolorclick = labelcolorclick(),
-                 labelsizeclick = labelsizeclick(),
-                 pointsize = pointsize(),
-                 visible_cutoffs = show_cutoffs(),
-                 show_outlines = show_outlines(),
-                 outline_color = outlinecolor(),
-                 height = height(),
-                 width = width(),
-                 space = space(),
-                 threshold_color = thresholdcolor(),
-                 download.filetype = filetype())
+    dataframes$all_annotations_positions <- aap
+  })
+  
+  
+  plot <- reactive({
+    p <- NULL
+    if(!is.null(de())) {
+      p <- make_volcano_plotly(
+        de(),
+        dataframes$annotations_1,
+        dataframes$annotations_2,
+        dataframes$annotations_click,
+        graph_title = title(),
+        log_fc_cutoff = logfc(), 
+        p_val_cutoff = pval(),
+        upcolor = upcolor(), 
+        downcolor = downcolor(), 
+        midcolor = midcolor(),
+        labelcolor1 = labelcolor1(),
+        labelsize1 = labelsize1(),
+        labelcolor2 = labelcolor2(),
+        labelsize2 = labelsize2(),
+        labelcolorclick = labelcolorclick(),
+        labelsizeclick = labelsizeclick(),
+        pointsize = pointsize(),
+        visible_cutoffs = show_cutoffs(),
+        show_outlines = show_outlines(),
+        outline_color = outlinecolor(),
+        height = height(),
+        width = width(),
+        space = space(),
+        threshold_color = thresholdcolor(),
+        download.filetype = filetype())
+    }
     return(p)
+  })
+  
+  
+  # Render the plot
+  output$plot <- renderPlotly(
+    {
+      update_annotations_1()
+      update_annotations_2()
+      update_annotations_click()
+      update_all_annotations_positions()
+      plot()
     
     })
   
@@ -621,29 +695,19 @@ server <- function(input, output, session) {
         # Extract ax and ay values
         if(grepl("\\.ax$", name)) {
           ax_value <- relayout_data[[name]]
-          all_annotations_positions()
+         # all_annotations_positions()
         } else if (grepl("\\.ay$", name)) {
           ay_value <- relayout_data[[name]]
         }
       }
       # Update all_annotations_positions with new position info
-      aap <- all_annotations_positions()
+      aap <- dataframes$all_annotations_positions
       aap$ax[i + 1] <- ax_value
       aap$ay[i + 1] <- ay_value
-      all_annotations_positions(aap)
+      dataframes$all_annotations_positions <- aap
     } 
   })
   
-  # Render the figure for download
-    output$download <- downloadHandler(
-      filename = function() {
-        #paste("plot", Sys.Date(), ".", input$filetype, sep = "")
-        paste("plot", Sys.Date(), ".html", sep = "")
-      },
-      content = function(file) {
-  ## CODE TO SAVE PLOT
-        
-      })
   
 } # End of server function
   
