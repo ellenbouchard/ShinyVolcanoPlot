@@ -1,8 +1,15 @@
+# 
+# My Volcano: A Shiny App for custom Volcano Plot generation 
 #
-# This is my pet project: a Shiny app that renders custom, dynamic volcano plots
+# Author: Ellen Bouchard
+# 
 # Date Created: December 4 2024
+# 
+# This is my pet project: a Shiny app that renders custom, dynamic, and interactive volcano plots with Plotly. 
+# 
 #
 
+############# SETUP ################
 library(shiny)
 library(ggplot2)
 library(ggrepel)
@@ -10,11 +17,17 @@ library(dplyr)
 library(plotly)
 library(shinyjs)
 
-### FUNCTIONS
+############## FUNCTIONS #################
 
-## Function 1: process data for plotting
-# (This used to be in the same function as make_volcano, but for the purposes
-# of dynamic annotations needs to be separate)
+## Function: process_for_volcano
+# This function is used to process data for plotting. 
+# INPUT:
+#   de = an R dataframe containing DE results
+#   log_fc_cutoff = a numeric indicating log2 fold change threshold for display
+#   p_val_cutoff = a numeric indicating FDR adjusted p value threshold for display
+#   genes_to_label_1 = a vector of strings indicating which genes to add text labels to in the "first" label layer
+#   genes_to_label_2 = a vector of strings indicating which genes to add text labels to in the "second" label layer
+#   genes_to_label_click = a vector of strings indicating which genes to add text labels to that were chosen via direct click 
 
 process_for_volcano = function(de,
                              log_fc_cutoff = 0.05,
@@ -24,27 +37,28 @@ process_for_volcano = function(de,
                              genes_to_label_click = c()
                              ) {
   
-  # Set cutoffs
+  # Set positive and negative log fold change cutoffs 
   up_cutoff <- log_fc_cutoff
   down_cutoff <- -1 * log_fc_cutoff
   
-  # For adjusted p values of zero, change neg_log10_pval so that it is not infinite
+  # For adjusted p values of zero, change neg_log10_pval so that it is not infinite (change to machine minimum representable value)
   de$neg_log10_pval[de$p_val_adj == 0] <- -log10(.Machine$double.xmin)
   
   # Label genes as significantly "UP" or "DOWN" based on p val and logFC thresholds
+  # do so by adding "reg" column that contains either "UP", "DOWN" or blanks for non-significant genes 
   de$reg = ""
   de$reg[de$p_val_adj < p_val_cutoff & de$avg_log2FC > up_cutoff & de$avg_log2FC > 0] <- "UP"
   de$reg[de$p_val_adj < p_val_cutoff & de$avg_log2FC < down_cutoff & de$avg_log2FC < 0] <- "DOWN"
   
-  # Add first layer of labels
+  # Add first layer of labels by adding gene name to "name1" column 
   de$name1 = ""
   if(length(genes_to_label_1) > 0) {de <- de %>% mutate(name1 = ifelse(gene  %in% genes_to_label_1 & reg != "",gene, ""))}  
   
-  # Add second layer of labels
+  # Add second layer of labels by adding gene name to "name2" column 
   de$name2 = ""
   if(length(genes_to_label_2) > 0) {de <- de %>% mutate(name2 = ifelse(gene  %in% genes_to_label_2 & reg != "",gene, ""))}  
   
-  # Add third ("clicked") layer of labels, only if genes are not in first two layers of labels
+  # Add third ("clicked") layer of labels, only if genes are not in first two layers of labels, by adding gene name to "nameclick" column 
   de$nameclick = ""
   if(length(genes_to_label_click) > 0) {
     de <- de %>% mutate(nameclick = ifelse(gene %in% genes_to_label_click & 
@@ -55,7 +69,39 @@ process_for_volcano = function(de,
   return(de)
 }
 
-# Function make_volcano_ploty: takes the output of process_for_volcano and returns volcano plot made with Plotly
+# Function make_volcano_ploty: 
+# Takes the output of process_for_volcano and returns volcano plot made with Plotly
+# INPUT:
+#   de = an R dataframe of DE results, previously processed by the process_for_volcano function
+#   annot_de_1 = a dataframe that contains the avg_log2FC and neg_log10_pval values, as well as names, for 
+#     genes annotated in layer 1
+#   annot_de_2 = a dataframe that contains the avg_log2FC and neg_log10_pval values, as well as names, for 
+#     genes annotated in layer 2
+#   annot_de_click = a dataframe that contains the avg_log2FC and neg_log10_pval values, as well as names, for 
+#     genes annotated via direct click 
+#   log_fc_cutoff = a numeric indicating log2 fold change threshold for display
+#   p_val_cutoff = a numeric indicating FDR adjusted p value threshold for display
+#   graph_title = a string indicating graph title
+#   upcolor = color to use for significantly upregulated genes
+#   downcolor = color to use for significantly downregulated genes
+#   midcolor = color to use for genes that are not significant
+#   labelcolor1 = color for text of labels in annotation layer 1
+#   labelcolor2 = color for text of labels in annotation layer 2
+#   labelcolorclick = color for text of labels in annotation layer "cick" (labels chosen by direct click)
+#   pointsize = numeric indicating size of points
+#   labelsize1 = numeric indicating size of labels for annotation layer 1 
+#   labelsize2 = numeric indicating size of labels for annotation layer 2
+#   labelsizeclick = numeric indicating size of labels for annotation layer "click"
+#   visiblecutoffs = boolean indicating whether to display dotted lines indicating significance thresholds
+#   threshold_color = color for lines of significance thresholds 
+#   show_outlines = boolean indicating whether points have distinct outlines
+#   outline_color = color for outlines of points
+#   height = numeric indicating height of graph,
+#   width = numeric indicating width of graph 
+#   space = numeric indicating amount of space between a labeled point and the line connecting the point to its label
+#   download.filetype = indicates what file type the plot should download as
+# OUTPUT:
+#     plot = a Plotly object
 make_volcano_plotly = function( 
     de, 
     annot_de_1,
@@ -83,10 +129,11 @@ make_volcano_plotly = function(
     space = 5,
     download.filetype = "png") {
   
+  # Define positive and negative log2 fold change thresholds 
   up_cutoff <- log_fc_cutoff
   down_cutoff <- -1 * log_fc_cutoff
 
-  # Define colors
+  # Define colors for downregulated, upregulated, and insignificant genes 
   colors_pal <- c(downcolor, midcolor, upcolor)
   colors_pal <- setNames(colors_pal, c("DOWN", "", "UP")) 
   
@@ -202,8 +249,7 @@ make_volcano_plotly = function(
     )
   }
 
-  
-  # Add black out lines if show_outlines is TRUE
+  # Add outlines to points if show_outlines is TRUE
   if(show_outlines) {
     plot <- plot %>% 
       add_trace(
@@ -220,7 +266,7 @@ make_volcano_plotly = function(
         hoverinfo = "none"
       )
     
-  } # Add markers
+  } # Add markers / points
   plot <- plot %>% 
      add_trace(
       x = ~avg_log2FC, 
@@ -247,12 +293,23 @@ make_volcano_plotly = function(
                             showgrid = FALSE,
                             zeroline = FALSE  
                           ),
-                          dragmode = FALSE)
+                          dragmode = FALSE,
+                          margin = list(
+                            l = 70,
+                            r = 70,
+                            t = 70,
+                            b = 70
+                          ))
   return(plot)
 }
 
 
-# Function for determining if input color is valid
+# Function is_valid_color
+# Determines if input color string is valid to use as a color for plotting 
+# INPUT:
+#   color = a string indicating what the user has input for a color
+# OUTPUT:
+#   boolean indicating whether the input string can be used as a color 
 is_valid_color <- function(color) {
   tryCatch({
     grDevices::col2rgb(color)
@@ -264,9 +321,9 @@ is_valid_color <- function(color) {
 
 
 
-## SHINY APP
+############ SHINY APP #############
 
-# Define UI for application
+############ Define UI for application ###############
 ui <- fluidPage(
   # Enable ShinyFeedback
   shinyFeedback::useShinyFeedback(),
@@ -301,6 +358,7 @@ ui <- fluidPage(
                  h4("Edit Labels Added by Clicking"),
                  numericInput("labelsizeclick", "Label Font Size", value = 10),
                  textInput("labelcolorclick", "Label Font Color", value = "Black"),
+                 actionButton("reset_clicked_labels", "Reset Labels"),
                  h4("Add Labels by Entering Gene Names"),
                  textAreaInput("gene_input_1", "Enter Gene Names (comma or newline separated)",
                                height = "100px"),
@@ -343,7 +401,7 @@ ui <- fluidPage(
 )
 
 
-# SERVER FUNCTION
+################ SERVER FUNCTION ##################
 server <- function(input, output, session) {
   # Process the input file
   data <- reactive({
@@ -377,8 +435,8 @@ server <- function(input, output, session) {
     return(df)
   })
   
-  # Define input variables as reactives
-  title <- debounce(reactive(input$title), millis = 300)
+  # Define input variables as reactive values
+  title <- debounce(reactive(input$title), millis = 500)
   logfc <- debounce(reactive(input$logfc), millis = 300)
   pval <- debounce(reactive(input$pval), millis = 300)
   labelsize1 <- debounce(reactive(input$labelsize1), millis = 300)
@@ -453,12 +511,18 @@ server <- function(input, output, session) {
   })
   
   # Make reactive lists to store specific genes to label
+  # These are simply lists that contain gene names. The dataframes that store information about these genes are defined below. 
   genes_to_label_1 <- reactiveVal(c())
   genes_to_label_2 <- reactiveVal(c())
   genes_to_label_click <- reactiveVal(c())
   
- # Observe plotly click events
-  # priority must be set to "event" or else Plotly will ignore multiple clicks in the same spot
+  # Reset button for clicked labels
+  observeEvent(input$reset_clicked_labels, {
+    genes_to_label_click(c())
+  })
+  
+ # Observe plotly click events in which the user clicks on points to add the gene to the clicked gene list
+  # Priority must be set to "event" or else Plotly will ignore multiple clicks in the same spot
   observeEvent(event_data("plotly_click", priority = "event"), {
     click_data <- event_data("plotly_click")
     req(click_data)
@@ -470,7 +534,8 @@ server <- function(input, output, session) {
       pull()
 
     # Append clicked gene information 
-    if(length(clicked_gene) > 0) { # If the click successfully pulled a gene:
+    # If the click successfully pulled a gene:
+    if(length(clicked_gene) > 0) { 
       # If the gene is not in genes_to_label_click OR in other gene input lists,
       # Add the gene to genes_to_label_click
       if(!(clicked_gene %in% genes_to_label_click() ||
@@ -514,7 +579,7 @@ server <- function(input, output, session) {
     genes_to_label_click(setdiff(genes_to_label_click(), genes_to_label_2()))
   })
   
-  # Create reactive dataframe for data, using input data
+  # Create reactive dataframe for data, using input data and process_for_volcano function
   de <- reactive({
     de <- NULL
     if(!is.null(data())) {
@@ -528,7 +593,11 @@ server <- function(input, output, session) {
     return(de)
   })
   
-  # Initialize annotation dataframes as reactive values
+  # Initialize annotation dataframes as a list reactive values
+  # all_annotations_positions = a dataframe that contains a list of all the genes that are currently annotated with their positions
+  # annotations_1 = a dataframe that contains all information for the genes annotated in layer 1
+  # annotations_2 = a dataframe that contains all information for the genes annotated in layer 2
+  # annotations_click = a dataframe that contains all information for the genes annotated by clicking 
   dataframes <- reactiveValues(
     all_annotations_positions = reactiveVal(data.frame(gene = character(), ax = numeric(), ay = numeric())),
     annotations_1 = reactiveVal(data.frame(gene = character(), 
@@ -556,19 +625,21 @@ server <- function(input, output, session) {
     
   # Create function to update annotations_1
   update_annotations_1 <- reactive({
+    # Get genes to label in layer 1 from the de dataframe
     annot_de_1 <- de()[de()$name1 != "", ]
+    # Initiate annotations dataframe with default positions
     if(nrow(annot_de_1) > 0) {
        annot_de_1$ax <- 20
        annot_de_1$ay <- -20
+       # If any of these genes are already annotated and stored in all_annotations_positions, update annot_de_1 with gene positions
        aap <- dataframes$all_annotations_positions
-       # If there are already genes in all_annotations_positions, update annot_de_1 with gene positions
        if(nrow(aap) > 0) {
          merged1 <- merge(annot_de_1, aap, by.x = "name1", by.y = "gene", all.x = TRUE)
          merged1$ax <- ifelse(is.na(merged1$ax.y), merged1$ax.x, merged1$ax.y)
          merged1$ay <- ifelse(is.na(merged1$ay.y), merged1$ay.x, merged1$ay.y)
          annot_de_1 <- merged1
        }
-       # Finish processing annot_de_1 dataframe
+       # Finish processing annot_de_1 dataframe by sorting and selecting columns of interest 
        annot_de_1 <- annot_de_1 %>% arrange(desc(neg_log10_pval))
        annot_de_1 <- annot_de_1 %>% select(gene, avg_log2FC, p_val_adj, neg_log10_pval, name1, ax, ay)
     }
@@ -578,19 +649,20 @@ server <- function(input, output, session) {
   
   # Create function to update annotations_2
   update_annotations_2 <- reactive({
+    # Get genes to label in layer 2 from the de dataframe
     annot_de_2 <- de()[de()$name2 != "", ]
     if(nrow(annot_de_2) > 0) {
       annot_de_2$ax <- 20
       annot_de_2$ay <- -20
+      # If any genes are already in all_annotations_positions, update annot_de_2 with gene positions
       aap <- dataframes$all_annotations_positions
-      # If there are already genes in all_annotations_positions, update annot_de_2 with gene positions
       if(nrow(aap) > 0) {
         merged2 <- merge(annot_de_2, aap, by.x = "name2", by.y = "gene", all.x = TRUE)
         merged2$ax <- ifelse(is.na(merged2$ax.y), merged2$ax.x, merged2$ax.y)
         merged2$ay <- ifelse(is.na(merged2$ay.y), merged2$ay.x, merged2$ay.y)
         annot_de_2 <- merged2
       }
-      # Finish processing annot_de_1 dataframe
+      # Finish processing annot_de_2 dataframe
       annot_de_2 <- annot_de_2 %>% arrange(desc(neg_log10_pval))
       annot_de_2 <- annot_de_2 %>% select(gene, avg_log2FC, p_val_adj, neg_log10_pval, name2, ax, ay)
     }
@@ -600,19 +672,20 @@ server <- function(input, output, session) {
   
   # Create function to update annotations_click
   update_annotations_click <- reactive({
+    # Get genes to label in "click" layer from the de dataframe
     annot_de_click <- de()[de()$nameclick != "", ]
     if(nrow(annot_de_click) > 0) {
       annot_de_click$ax <- 20
       annot_de_click$ay <- -20
+    # If there are already genes in all_annotations_positions, update annot_de_click with gene positions
       aap <- dataframes$all_annotations_positions
-      # If there are already genes in all_annotations_positions, update annot_de_click with gene positions
       if(nrow(aap) > 0) {
         mergedclick <- merge(annot_de_click, aap, by.x = "nameclick", by.y = "gene", all.x = TRUE)
         mergedclick$ax <- ifelse(is.na(mergedclick$ax.y), mergedclick$ax.x, mergedclick$ax.y)
         mergedclick$ay <- ifelse(is.na(mergedclick$ay.y), mergedclick$ay.x, mergedclick$ay.y)
         annot_de_click <- mergedclick
       }
-      # Finish processing annot_de_1 dataframe
+      # Finish processing annot_de_click dataframe
       annot_de_click <- annot_de_click %>% arrange(desc(neg_log10_pval))
       annot_de_click <- annot_de_click %>% select(gene, avg_log2FC, p_val_adj, neg_log10_pval, nameclick, ax, ay)
     }
@@ -620,7 +693,7 @@ server <- function(input, output, session) {
     dataframes$annotations_click <- annot_de_click
   })
   
-  # Create function to update all_annotations_positions
+  # Create function to update all_annotations_positions from the data in the annotations_1, annotations_2, and annotations_click dataframes
   update_all_annotations_positions <- reactive({
     aap <- data.frame(gene = c(), ax = numeric(), ay = numeric())
     if(nrow(dataframes$annotations_1) > 0 || nrow(dataframes$annotations_2) > 0 || nrow(dataframes$annotations_click > 0)) {
@@ -630,7 +703,7 @@ server <- function(input, output, session) {
     dataframes$all_annotations_positions <- aap
   })
   
-  
+  # Generate the plot using the make_volcano_plotly function
   plot <- reactive({
     p <- NULL
     if(!is.null(de())) {
@@ -677,7 +750,7 @@ server <- function(input, output, session) {
     })
   
   # Observe events
-  # This is where we check to see if the user has clicked and dragged a label to reposition
+  # This is where we check to see if the user has clicked and dragged a label to reposition it
   observeEvent(event_data("plotly_relayout"), {
     relayout_data <- event_data("plotly_relayout")
     req(relayout_data)
@@ -695,7 +768,6 @@ server <- function(input, output, session) {
         # Extract ax and ay values
         if(grepl("\\.ax$", name)) {
           ax_value <- relayout_data[[name]]
-         # all_annotations_positions()
         } else if (grepl("\\.ay$", name)) {
           ay_value <- relayout_data[[name]]
         }
